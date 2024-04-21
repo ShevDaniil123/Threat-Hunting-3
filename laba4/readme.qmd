@@ -1,0 +1,108 @@
+---
+title: "Лабораторная работа №4"
+author: Шевченко Д. Д.
+format:
+    md:
+        output-file: readme.md
+editor: visual
+---
+
+## Цель Работы
+
+1. Изучить возможности СУБД DuckDB для обработки и анализ больших данных
+2. Получить навыки применения DuckDB совместно с языком программирования R
+3. Получить навыки анализа метаинфомации о сетевом трафике
+4. Получить навыки применения облачных технологий хранения, подготовки и
+анализа данных: Yandex Object Storage, Rstudio Server.
+
+
+## Ход работы
+
+## Подключение arrow
+
+
+```{r}
+library(duckdb)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+```
+
+```{r}
+c <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+dbExecute(conn = c, "INSTALL httpfs; LOAD httpfs;")
+
+PARQUET_FILE1 = "https://storage.yandexcloud.net/arrow-datasets/tm_data.pqt"
+
+
+a <- "SELECT * FROM read_parquet([?])"
+dt <- dbGetQuery(c, a, list(PARQUET_FILE1))
+
+```
+## Задание 1
+
+### Важнейшие документы с результатами нашей исследовательской деятельности в области создания вакцин скачиваются в виде больших заархивированных дампов. Один из хостов в нашей сети используется для пересылки этой информации – он пересылает гораздо больше информации на внешние ресурсы в Интернете, чем остальные компьютеры нашей сети. Определите его IP-адрес.
+
+```{r}
+dt1 <- dt  %>% select(src, dst, bytes) %>% filter(!str_detect(dst, '1[2-4].*')) %>% group_by(src) %>% summarise(bytes_amount = sum(bytes)) %>% arrange(desc(bytes_amount)) %>% collect()
+dt1 %>% head(1)
+```
+
+### Ответ: 13.37.84.125
+
+## Задание 2
+
+### Другой атакующий установил автоматическую задачу в системном планировщике cron для экспорта содержимого внутренней wiki системы. Эта система генерирует большое количество трафика в нерабочие часы, больше чем остальные хосты. Определите IP этой системы. Известно, что ее IP адрес отличается от нарушителя из предыдущей задачи.
+
+### Поиск не рабочих часов
+
+```{r}
+dt21 <- dt %>% select(timestamp, src, dst, bytes) %>% filter(!str_detect(dst, '1[2-4].*')) %>% mutate(timestamp = hour(as_datetime(timestamp/1000))) %>% group_by(timestamp) %>% summarize(traffic_size = sum(bytes)) %>% arrange(desc(traffic_size))
+dt21 %>% collect() %>% print(n = Inf)
+```
+
+### Поиск IP
+
+```{r}
+dt22 <- dt %>% select(timestamp, src, dst, bytes) %>% mutate(timestamp = hour(as_datetime(timestamp/1000))) %>% filter(!str_detect(dst, '1[2-4].*') & timestamp >= 0 & timestamp <= 15)  %>% group_by(src) %>% summarise(bytes_amount = sum(bytes)) %>% arrange(desc(bytes_amount)) %>% collect()
+dt22 %>% filter(src != '13.37.84.125') %>% head(1)
+```
+
+### Ответ: 12.55.77.96
+
+## Задание 3
+
+### Еще один нарушитель собирает содержимое электронной почты и отправляет в Интернет используя порт, который обычно используется для другого типа трафика. Атакующий пересылает большое количество информации используя этот порт, которое нехарактерно для других хостов, использующих этот номер порта. Определите IP этой системы. Известно, что ее IP адрес отличается от нарушителей из предыдущих задач.
+
+Найдем среднее значение трафика для каждого порта, и суммарный объем трафика для каждого хоста по портам. Затем соединим две таблицы, и найдем отношение максимального значения трафика по портам к среднему значению объема трафику по порту
+
+```{r}
+dt31 <- dt |> select(timestamp, src, dst, port, bytes) %>% filter(!str_detect(dst, '1[2-4].')) %>% group_by(src, port) %>% summarise(bytes_ip_port = sum(bytes)) %>% group_by(port) %>% summarise(average_port_traffic = mean(bytes_ip_port)) %>% arrange(desc(average_port_traffic)) |> collect()
+
+dt32 <- dt |> select(timestamp, src, dst, port, bytes) %>% filter(!str_detect(dst, '1[2-4].')) %>% group_by(src, port) %>% summarise(bytes_ip_port = sum(bytes)) %>% collect() %>% group_by(port) %>% top_n(1, bytes_ip_port) %>% arrange(desc(bytes_ip_port))
+
+dt33 <- merge(dt32, dt31, by = "port")
+
+anomaly_ip_port_traffic <- dt33 %>% mutate(average_anomaly = bytes_ip_port/average_port_traffic) %>% arrange(desc(average_anomaly)) %>% head(1)
+anomaly_ip_port_traffic
+```
+
+### Ответ: 12.30.96.87
+
+## Задание 4
+
+### Зачастую в корпоротивных сетях находятся ранее зараженные системы, компрометация которых осталась незамеченной. Такие системы генерируют небольшое количество трафика для связи с панелью управления бот-сети, но с одинаковыми параметрами – в данном случае с одинаковым номером порта. Какой номер порта используется бот-панелью для управления ботами?
+
+
+```{r}
+a <- "SELECT min(bytes),max(bytes),max(bytes) - min(bytes), avg(bytes), port,count(port) FROM read_parquet([?]) group by port having avg(bytes) - min(bytes) < 10 and min(bytes) != max(bytes)"
+dt <- dbGetQuery(c, a, list(PARQUET_FILE1))
+dt %>% select(port)
+```
+
+### Ответ: 124
+
+## Вывод
+
+По завершению работы удалось изучить возможности СУБД DuckDB для обработки и анализ больших данных, получить навыки применения DuckDB совместно с языком программирования R, получить навыки анализа метаинфомации о сетевом трафике, получить навыки применения облачных технологий хранения, подготовки и
+анализа данных: Yandex Object Storage, Rstudio Server.
